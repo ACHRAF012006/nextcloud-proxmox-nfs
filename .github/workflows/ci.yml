@@ -23,4 +23,6 @@ jobs:
           node scripts/build.mjs --check
           node scripts/check-repo.mjs
       - name: Validation and mocked-host safety checks
-        run: bash tests/validation.sh
+        run: |
+          bash tests/validation.sh
+          bash tests/storage.sh

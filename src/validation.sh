@@ -24,6 +24,7 @@ valid_path() {
 }
 
 valid_mount() { valid_path "$1" && [[ $1 == /mnt/* || $1 == /srv/* ]]; }
+valid_snippet_path() { valid_path "$1" && [[ $1 == /var/lib/* || $1 == /srv/* ]]; }
 valid_data() { valid_path "$2" && [[ $2 == "$1/"* ]]; }
 valid_version() { [[ $1 =~ ^[1-9][0-9]*\.[0-9]+\.[0-9]+$ ]]; }
 valid_timezone() { [[ $1 =~ ^[A-Za-z0-9_+/-]+$ && $1 != *..* && -f /usr/share/zoneinfo/$1 ]]; }
@@ -52,6 +53,24 @@ valid_nfs_server() {
     if [[ $1 == *:* || $1 =~ ^[0-9.]+$ ]]; then valid_ip "$1"; else valid_hostname "$1"; fi
 }
 valid_vlan() { [[ $1 == none ]] || valid_uint "$1" 1 4094; }
+
+valid_snippet_config() {
+    python3 -c '
+import json,sys
+try:
+    c=json.load(sys.stdin)
+    ok=(c.get("type") == "dir" and c.get("shared",0) in (0,False,"0")
+        and "snippets" in c.get("content","").split(","))
+except (ValueError,AttributeError,TypeError):
+    ok=False
+sys.exit(not ok)'
+}
+
+valid_local_fs() { one_of "$1" ext2 ext3 ext4 xfs btrfs zfs f2fs jfs reiserfs; }
+
+valid_guest_bridge() {
+    [[ $1 =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,14}$ && ! $1 =~ ^(fwbr|fwln|fwpr)[0-9] ]]
+}
 
 prompt() {
     local variable=$1 label=$2 default=${3:-} answer

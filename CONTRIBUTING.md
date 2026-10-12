@@ -11,7 +11,7 @@ Run the README development checks with Bash, Python 3, Node.js and ShellCheck. A
 ## Releasing
 
 1. Set `VERSION=X.Y.Z` in `src/main.sh`, add a matching `CHANGELOG.md` entry and update versioned README links and `docs/release-notes.md`.
-2. Build `install.sh`, review its full diff, and run all CI checks. Update tests that explicitly check the CLI version. Review the staged files for secrets; automated pattern checks are only a baseline.
+2. Build `install.sh`, review its full diff, and run all CI checks, including both `tests/validation.sh` and `tests/storage.sh`. Review the staged files for secrets; automated pattern checks are only a baseline.
 3. Commit the reviewed version and create/push a `vX.Y.Z` tag on that exact commit. Do not move published release tags; publish a patch version instead.
 4. The tag workflow checks version agreement, shell syntax, ShellCheck, repository structure, generated output and mocked safety tests before publishing the installer and SHA-256 asset.
 5. Verify the workflow and raw tagged download, and document deployment-test results honestly. A stable installer URL identifies a release; it does not pin mutable Ubuntu package repositories or certify hardware/storage combinations.

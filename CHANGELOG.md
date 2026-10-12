@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.1] - 2026-10-12
+
+- Automatically provision dedicated node-local snippet storage after the displayed creation summary is confirmed, using editable ID/path defaults and preserving all existing storage definitions.
+- Filter unsuitable shared/remote snippet storage before prompting; create an existing local storage's missing snippet directory after confirmation.
+- Refuse occupied storage IDs, existing new-storage directories, symlink paths and network/unrecognized filesystems.
+- Exclude Proxmox VM firewall bridges from guest bridge choices/defaults.
+- Add mocked storage discovery, preview/cancellation, provisioning and collision tests; keep published v1.0.0 unchanged.
+
 ## [1.0.0] - 2026-10-12
 
 - Initial community installer for a new Ubuntu 24.04 LTS VM on Proxmox VE, with Nextcloud data on standard NFSv3/NFSv4 storage.

@@ -27,6 +27,7 @@ valid_path() {
 }
 
 valid_mount() { valid_path "$1" && [[ $1 == /mnt/* || $1 == /srv/* ]]; }
+valid_snippet_path() { valid_path "$1" && [[ $1 == /var/lib/* || $1 == /srv/* ]]; }
 valid_data() { valid_path "$2" && [[ $2 == "$1/"* ]]; }
 valid_version() { [[ $1 =~ ^[1-9][0-9]*\.[0-9]+\.[0-9]+$ ]]; }
 valid_timezone() { [[ $1 =~ ^[A-Za-z0-9_+/-]+$ && $1 != *..* && -f /usr/share/zoneinfo/$1 ]]; }
@@ -55,6 +56,24 @@ valid_nfs_server() {
     if [[ $1 == *:* || $1 =~ ^[0-9.]+$ ]]; then valid_ip "$1"; else valid_hostname "$1"; fi
 }
 valid_vlan() { [[ $1 == none ]] || valid_uint "$1" 1 4094; }
+
+valid_snippet_config() {
+    python3 -c '
+import json,sys
+try:
+    c=json.load(sys.stdin)
+    ok=(c.get("type") == "dir" and c.get("shared",0) in (0,False,"0")
+        and "snippets" in c.get("content","").split(","))
+except (ValueError,AttributeError,TypeError):
+    ok=False
+sys.exit(not ok)'
+}
+
+valid_local_fs() { one_of "$1" ext2 ext3 ext4 xfs btrfs zfs f2fs jfs reiserfs; }
+
+valid_guest_bridge() {
+    [[ $1 =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,14}$ && ! $1 =~ ^(fwbr|fwln|fwpr)[0-9] ]]
+}
 
 prompt() {
     local variable=$1 label=$2 default=${3:-} answer
@@ -302,7 +321,7 @@ NEXTCLOUD_GUEST_SCRIPT_EOF
 host_preflight() {
     [[ $(uname -s) == Linux && $EUID -eq 0 && -d /etc/pve ]] || die 'Run as root on a Proxmox VE host.'
     local command
-    for command in qm pvesh pvesm curl python3 sha256sum openssl ssh-keygen flock timeout stat; do
+    for command in qm pvesh pvesm curl python3 sha256sum openssl ssh-keygen flock timeout findmnt realpath hostname; do
         command -v "$command" >/dev/null || die "Required host command missing: $command (install it before continuing)."
     done
     [[ $(uname -m) == x86_64 ]] || die 'This release uses the Ubuntu amd64 cloud image and requires x86_64.'
@@ -313,11 +332,48 @@ discover_storage() {
     pvesm status --content "$1" | awk 'NR > 1 && $3 == "active" {print $1}'
 }
 
+local_directory_path() {
+    # Inspect the nearest existing parent without creating anything. Fail closed
+    # on symlinks, network filesystems and unrecognized filesystem types.
+    local path=$1 parent=$1 canonical filesystem
+    [[ $path == /* ]] || return 1
+    canonical=$(realpath -m -- "$path") || return 1
+    [[ $canonical == "$path" ]] || return 1
+    while [[ ! -e $parent ]]; do
+        parent=${parent%/*}
+        [[ -n $parent ]] || parent=/
+    done
+    [[ -d $parent ]] || return 1
+    filesystem=$(findmnt --noheadings --output FSTYPE --target "$parent") || return 1
+    valid_local_fs "$filesystem"
+}
+
+snippet_storage_usable() {
+    local config file
+    config=$(pvesh get /storage/"$1" --output-format json) || return 1
+    valid_snippet_config <<< "$config" || return 1
+    file=$(pvesm path "$1:snippets/nextcloud-bootstrap-check.yaml") || return 1
+    local_directory_path "${file%/*}"
+}
+
+discover_local_snippets() {
+    local candidate_id
+    while IFS= read -r candidate_id; do
+        [[ -n $candidate_id ]] || continue
+        if snippet_storage_usable "$candidate_id"; then
+            printf '%s\n' "$candidate_id"
+        else
+            printf 'Skipping snippet storage %s: requires a non-shared directory on a supported local filesystem.\n' "$candidate_id" >&2
+        fi
+    done < <(discover_storage snippets)
+}
+
 discover_bridges() {
     local path
     for path in /sys/class/net/*/bridge; do
         [[ -d $path ]] || continue
         path=${path%/bridge}
+        valid_guest_bridge "${path##*/}" || continue
         printf '%s\n' "${path##*/}"
     done
 }
@@ -325,14 +381,30 @@ discover_bridges() {
 collect_config() {
     local -a stores snippets bridges
     mapfile -t stores < <(discover_storage images)
-    mapfile -t snippets < <(discover_storage snippets)
+    mapfile -t snippets < <(discover_local_snippets)
     mapfile -t bridges < <(discover_bridges)
     ((${#stores[@]})) || die 'No active VM image storage detected.'
-    ((${#snippets[@]})) || die 'Enable snippets on a local directory storage in Proxmox before running. The installer will not change storage configuration.'
     ((${#bridges[@]})) || die 'No Linux network bridge detected. Configure one in Proxmox first.'
-    printf 'Active VM storage: %s\nSnippet storage: %s\nBridges: %s\n' "${stores[*]}" "${snippets[*]}" "${bridges[*]}"
+    printf 'Active VM storage: %s\nSuitable local snippet storage: %s\nBridges: %s\n' "${stores[*]}" "${snippets[*]:-none}" "${bridges[*]}"
     ask STORAGE 'VM disk/cloud-init storage' "${stores[0]}" one_of "${stores[@]}"
-    ask SNIPPET_STORAGE 'Bootstrap snippet storage (local directory only)' "${snippets[0]}" one_of "${snippets[@]}"
+    printf 'Choose +create to automatically add dedicated local snippet storage after confirmation.\n'
+    ask SNIPPET_STORAGE 'Bootstrap snippet storage (existing name or +create)' "${snippets[0]:-+create}" one_of "${snippets[@]}" +create
+    SNIPPET_MODE=existing
+    if [[ $SNIPPET_STORAGE == +create ]]; then
+        SNIPPET_MODE=create
+        HOST_NODE=$(hostname -s) || die 'Cannot determine the Proxmox node name.'
+        valid_hostname "$HOST_NODE" || die 'Invalid Proxmox node name.'
+        while :; do
+            ask SNIPPET_STORAGE 'New local snippet storage ID' nc-snippets valid_id
+            storage_id_available "$SNIPPET_STORAGE" && break
+            printf 'Storage ID is already in use. Choose another; existing storage will not be modified.\n' >&2
+        done
+        while :; do
+            ask NEW_SNIPPET_PATH 'New local snippet storage directory (under /var/lib or /srv)' /var/lib/nextcloud-vm-snippets valid_snippet_path
+            if [[ ! -e $NEW_SNIPPET_PATH && ! -L $NEW_SNIPPET_PATH ]] && local_directory_path "$NEW_SNIPPET_PATH"; then break; fi
+            printf 'Choose a new path on a supported local filesystem, without symlinks. Existing directories will not be reused.\n' >&2
+        done
+    fi
     ask BRIDGE 'Network bridge' "${bridges[0]}" one_of "${bridges[@]}"
     ask VLAN 'VLAN tag (none for untagged; bridge must support it)' none valid_vlan
     local next_id
@@ -379,14 +451,42 @@ assert_vm_unused() {
 }
 
 resolve_snippet() {
-    # Require node-local directory storage: no generated bootstrap files on an NFS server.
-    local config
-    config=$(pvesh get /storage/"$SNIPPET_STORAGE" --output-format json)
-    python3 -c 'import json,sys; c=json.load(sys.stdin); sys.exit(c.get("type") != "dir" or bool(c.get("shared",0)))' <<< "$config" || die 'Choose a non-shared local directory snippet storage.'
     SNIPPET_NAME="nextcloud-$VMID-bootstrap.yaml"
-    SNIPPET_FILE=$(pvesm path "$SNIPPET_STORAGE:snippets/$SNIPPET_NAME")
-    [[ $SNIPPET_FILE == /* && -d ${SNIPPET_FILE%/*} && ! -e $SNIPPET_FILE && ! -L $SNIPPET_FILE ]] || die 'Snippet directory must exist, and the target snippet must not already exist.'
-    [[ $(stat -f -c %T "${SNIPPET_FILE%/*}") != nfs ]] || die 'Snippet directory cannot be on an NFS filesystem. Choose local host storage.'
+    if [[ $SNIPPET_MODE == create ]]; then
+        storage_id_available "$SNIPPET_STORAGE" || die 'New storage ID is now occupied. No existing storage was changed.'
+        [[ ! -e $NEW_SNIPPET_PATH && ! -L $NEW_SNIPPET_PATH ]] || die 'New snippet directory already exists. Choose a fresh path.'
+        local_directory_path "$NEW_SNIPPET_PATH" || die 'New snippet directory must be on a supported local filesystem, without symlinks.'
+        SNIPPET_FILE="$NEW_SNIPPET_PATH/snippets/$SNIPPET_NAME"
+    else
+        snippet_storage_usable "$SNIPPET_STORAGE" || die 'Selected snippet storage is no longer a suitable non-shared local directory.'
+        SNIPPET_FILE=$(pvesm path "$SNIPPET_STORAGE:snippets/$SNIPPET_NAME")
+    fi
+    [[ ! -e $SNIPPET_FILE && ! -L $SNIPPET_FILE ]] || die 'Target bootstrap snippet already exists. Choose another VM ID.'
+    local_directory_path "${SNIPPET_FILE%/*}" || die 'Snippet directory must be on a supported local filesystem, without symlinks.'
+}
+
+storage_id_available() {
+    local inventory
+    inventory=$(pvesh get /storage --output-format json) || die 'Cannot check storage IDs.'
+    python3 -c 'import json,sys; sys.exit(any(c["storage"] == sys.argv[1] for c in json.load(sys.stdin)))' "$1" <<< "$inventory"
+}
+
+prepare_snippet_storage() {
+    # Called only AFTER the creation summary/confirmation and verified image download.
+    resolve_snippet
+    if [[ $SNIPPET_MODE == create ]]; then
+        printf 'Creating local snippet storage %s at %s for node %s...\n' "$SNIPPET_STORAGE" "$NEW_SNIPPET_PATH" "$HOST_NODE"
+        mkdir -p -- "${NEW_SNIPPET_PATH%/*}"
+        mkdir -m 700 -- "$NEW_SNIPPET_PATH"
+        mkdir -m 700 -- "$NEW_SNIPPET_PATH/snippets"
+        local_directory_path "$NEW_SNIPPET_PATH" || die 'Filesystem changed before storage registration; inspect created directories.'
+        pvesm add dir "$SNIPPET_STORAGE" --path "$NEW_SNIPPET_PATH" --content snippets --nodes "$HOST_NODE" --shared 0 --create-base-path 0 --create-subdirs 0
+        SNIPPET_MODE=existing
+    elif [[ ! -d ${SNIPPET_FILE%/*} ]]; then
+        printf 'Creating missing local snippet directory %s...\n' "${SNIPPET_FILE%/*}"
+        mkdir -p -- "${SNIPPET_FILE%/*}"
+    fi
+    resolve_snippet
 }
 
 show_plan() {
@@ -399,6 +499,11 @@ show_plan() {
     printf 'Nextcloud %s; hostname %s; reverse proxy %s; trusted proxy %s; timezone %s.\n' "$NC_VERSION" "$PUBLIC_HOST" "$PROXY_MODE" "${TRUSTED_PROXY:-none}" "$TIMEZONE"
     printf 'Guest: Ubuntu 24.04 LTS, Apache, PHP 8.3, MariaDB, Redis, NFS client, cron and guest agent.\n'
     printf 'Host: VM disks, cloud-init drive, bootstrap snippet %s, private state directory /root/nextcloud-vm-installer/%s.\n' "$SNIPPET_FILE" "$VMID"
+    if [[ $SNIPPET_MODE == create ]]; then
+        printf 'Host storage: ADD directory storage %s at %s, content snippets only, shared=0, restricted to node %s.\n' "$SNIPPET_STORAGE" "$NEW_SNIPPET_PATH" "$HOST_NODE"
+    elif [[ ! -d ${SNIPPET_FILE%/*} ]]; then
+        printf 'Host directory: CREATE missing snippet directory %s for existing storage %s.\n' "${SNIPPET_FILE%/*}" "$SNIPPET_STORAGE"
+    fi
     printf 'No NFS-server management, host package installation, DNS/proxy/firewall changes or existing VM changes.\n'
     printf 'HTTP backend listens on guest port 80. Configure HTTPS and restrict access before use.\n'
     local confirmation
@@ -409,6 +514,7 @@ show_plan() {
 host_error() {
     printf '\nInstallation failed. Created resources are retained for inspection; nothing is automatically destroyed.\n' >&2
     printf 'VM ID: %s. Private host state: %s. Guest log: /var/log/nextcloud-installer.log.\n' "$VMID" "${STATE_DIR:-not yet created}" >&2
+    printf 'Snippet storage/directory may have been created: %s / %s.\n' "$SNIPPET_STORAGE" "${SNIPPET_FILE%/*}" >&2
     printf 'See README recovery instructions. Do not publish state files, credentials, or unredacted logs.\n' >&2
 }
 
@@ -512,13 +618,14 @@ install_vm() {
     prepare_state
     download_image
     assert_vm_unused
+    prepare_snippet_storage
     create_vm
     wait_guest
     configure_guest
     trap - ERR
 }
 
-VERSION=1.0.0
+VERSION=1.0.1
 
 usage() {
     printf '%s\n' \
@@ -526,7 +633,7 @@ usage() {
         'Usage: ./install.sh [--help | --version]' \
         'Without arguments: interactively review and create a new Ubuntu VM on Proxmox.' \
         'Run as root on an x86_64 Proxmox VE host. No NFS server changes are made.' \
-        'A local directory storage with snippets enabled is required.' \
+        'Suitable local snippet storage is detected; new local storage can be created after confirmation.' \
         'CPU/RAM/disk, storage, bridge/VLAN, networking, NFS, hostname/proxy and timezone are editable.'
 }
 

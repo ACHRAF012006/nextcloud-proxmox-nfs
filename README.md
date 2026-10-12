@@ -1,6 +1,6 @@
 # Nextcloud VM Installer for Proxmox VE with NFS Storage
 
-Community software that creates a new Ubuntu VM on Proxmox VE and installs Nextcloud with its data directory on an existing NFS export. Configuration is interactive and reusable across environments. Version: **1.0.0**. Licensed under [MIT](LICENSE).
+Community software that creates a new Ubuntu VM on Proxmox VE and installs Nextcloud with its data directory on an existing NFS export. Configuration is interactive and reusable across environments. Version: **1.0.1**. Licensed under [MIT](LICENSE).
 
 This project is not affiliated with, sponsored by, or endorsed by Proxmox Server Solutions GmbH, Nextcloud GmbH, or iXsystems / TrueNAS. Product names identify the software and example storage platforms; they do not imply official support.
 
@@ -14,19 +14,20 @@ The installer displays all selected settings and requires `CREATE <VM ID>` befor
 | --- | --- |
 | Proxmox host | One new VM with an imported Ubuntu 24.04 LTS amd64 disk, an editable disk size, cloud-init drive, virtual NIC, serial console and enabled guest agent |
 | Selected local snippet storage | `nextcloud-<VM ID>-bootstrap.yaml`, containing guest-agent bootstrap instructions and no secrets |
+| Optional automatic snippet setup | A new node-restricted, non-shared directory storage for snippets only, plus its local directories; defaults are editable and shown before confirmation |
 | Proxmox root directory | `/root/nextcloud-vm-installer/<VM ID>/`, mode 0700, containing the downloaded image/checksums, a generated SSH key pair and a mode-0600 `credentials.txt` |
 | Guest system disk | Apache, PHP 8.3, MariaDB, Redis, NFS client, Nextcloud application/configuration, systemd background jobs and protected installation log |
 | Existing NFS export | Nextcloud application data written by the guest into a pre-existing, dedicated, empty child directory; one temporary write-test file is created and removed |
 
-The installer does not administer the NFS server, change export configuration or permission policies, install host packages, alter host networking/storage definitions, configure an external proxy/DNS/firewall, reuse an existing VM, or delete failed VMs automatically. Existing host packages, bridges and storage must already be prepared. It refuses occupied VM/CT IDs across the cluster.
+The installer does not administer the NFS server, change export configuration or permission policies, install host packages, alter host networking or existing storage definitions, configure an external proxy/DNS/firewall, reuse an existing VM, or delete failed VMs automatically. It can add a dedicated local snippet storage after the creation summary is confirmed, without modifying existing storage. Existing host packages, bridges and VM disk storage must already be prepared. It refuses occupied VM/CT IDs across the cluster.
 
 Nextcloud's database, Redis and application code stay on the guest system disk. NFS contains the data directory. Both need coordinated backups.
 
 ## Requirements
 
 - An x86_64 Proxmox VE host, root access and a terminal. The implementation uses standard `qm`, `pvesh` and `pvesm` interfaces; no particular Proxmox release has yet been deployment-tested.
-- Active storage supporting VM images/cloud-init and a Linux network bridge. A **non-shared local directory storage with `snippets` enabled** and its snippet directory already created is required. Enable/create this through Proxmox administration; the installer does not alter storage definitions.
-- Host commands: `qm`, `pvesh`, `pvesm`, `curl`, `python3`, `sha256sum`, `openssl`, `ssh-keygen`, `flock`, `timeout`, `stat`, and normal GNU/Linux utilities. Missing commands cause a preflight failure. Install dependencies yourself before running.
+- Active storage supporting VM images/cloud-init and a Linux network bridge. Suitable existing **non-shared local directory storage with `snippets` enabled** is detected. If none is suitable, the default is `+create`: automatically add a dedicated local storage after confirmation. An existing storage's missing snippet directory can also be created after confirmation.
+- Host commands: `qm`, `pvesh`, `pvesm`, `curl`, `python3`, `sha256sum`, `openssl`, `ssh-keygen`, `flock`, `timeout`, `findmnt`, `realpath`, `hostname`, and normal GNU/Linux utilities. Missing commands cause a preflight failure. Install dependencies yourself before running.
 - Host and guest outbound access to Ubuntu/Nextcloud HTTPS downloads and Ubuntu package repositories; working guest DNS and DHCP or a valid static IPv4 configuration. VM network configuration supports IPv4 DHCP/static in this release; the NFS endpoint may also be IPv6.
 - A reachable NFSv3 or NFSv4 server, with the export prepared and the guest authorized. Choose protocol `3`, `4`, `4.1` or `4.2`; the server must support that choice. NFSv4 export paths are relative to the server's NFSv4 namespace and may differ from local filesystem paths.
 - A DNS hostname for the service. For public use, an existing HTTPS reverse proxy and a restrictive network policy for guest HTTP port 80 are required. Direct mode is HTTP for initial private-network validation; it does not provision a TLS certificate.
@@ -37,7 +38,7 @@ Nextcloud's database, Redis and application code stay on the guest system disk. 
 Recommended: download, inspect, then run on the Proxmox host:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ACHRAF012006/nextcloud-proxmox-nfs/v1.0.0/install.sh -o install.sh
+curl -fsSL https://raw.githubusercontent.com/ACHRAF012006/nextcloud-proxmox-nfs/v1.0.1/install.sh -o install.sh
 less install.sh
 bash install.sh --version
 bash install.sh --help
@@ -49,7 +50,7 @@ The installer is self-contained: reviewing `install.sh` includes the host logic,
 Convenient stable-version command:
 
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/ACHRAF012006/nextcloud-proxmox-nfs/v1.0.0/install.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/ACHRAF012006/nextcloud-proxmox-nfs/v1.0.1/install.sh)"
 ```
 
 Development/latest installer from `main`:
@@ -74,8 +75,9 @@ Every detected/default value is editable. No storage name, bridge, subnet, NFS e
 | Setting | Detection or editable default |
 | --- | --- |
 | VM image storage | First active image-capable storage, selected from detected choices |
-| Snippet storage | Detected snippet-capable storage; must be a non-shared local directory |
-| Bridge | First detected Linux bridge, selected from detected choices |
+| Snippet storage | First suitable non-shared local directory storage; `+create` defaults to automatic creation if none exists |
+| New snippet storage ID / path | `nc-snippets` / `/var/lib/nextcloud-vm-snippets`, both editable; existing IDs and directories are refused |
+| Bridge | First detected Linux bridge excluding Proxmox VM firewall bridges, selected from detected choices |
 | VLAN | `none`; editable tag 1–4094 |
 | VM ID | Detected next available cluster ID, rechecked before creation |
 | VM name | `nextcloud` |
@@ -90,6 +92,12 @@ Every detected/default value is editable. No storage name, bridge, subnet, NFS e
 | Nextcloud version | Required explicit compatible `X.Y.Z` |
 
 Paths currently accept portable ASCII letters, digits, underscores, dots and hyphens; whitespace and traversal components are refused. Mount points must be under `/mnt` or `/srv`. The data directory must be a dedicated child of that mount, outside the web root, already present on the server and empty. This release creates a fresh installation and does not migrate or upgrade an existing one.
+
+### Automatic local snippet storage
+
+Shared/NFS/CIFS snippet storage is filtered out before asking deployment questions. Select an existing suitable entry, or choose `+create` (press Enter when it is the default). For automatic creation, review/edit the proposed storage ID and new directory under `/var/lib` or `/srv`. The installer refuses occupied IDs, existing directories, symlink paths and paths on network or unrecognized filesystems. Supported local filesystems for this check are ext2/3/4, XFS, Btrfs, ZFS, F2FS, JFS and ReiserFS; other types stop with an explanation.
+
+The summary identifies the storage ID, path and current Proxmox node before `CREATE <VM ID>`. After confirmation and cloud-image verification, the installer creates the directories and registers a `dir` storage with `content=snippets`, `shared=0`, restricted to the detected node. Existing storage definitions are never changed. When an existing suitable storage is selected, its missing snippets directory may be created instead. These host resources contain bootstrap instructions, not application secrets. This automation does not create NFS exports or change server permissions. Node-local snippets must be handled manually before migrating this VM to another node.
 
 ## NFS preparation and troubleshooting
 
@@ -115,7 +123,7 @@ For proxy mode, configure your existing proxy to terminate HTTPS, forward the ho
 
 ## Failure recovery and maintenance
 
-On failure, the VM, disks, bootstrap snippet and private host state are retained. There is no automatic destructive rollback. Inspect the guest console, `cloud-init status --long`, `/var/log/nextcloud-installer.log` (root-only) and `/var/lib/nextcloud-installer/status`. Do not paste credentials or unredacted configuration/logs into issues.
+On failure, any created VM, disks, bootstrap snippet, new local snippet storage/directories and private host state are retained. There is no automatic destructive rollback. An unused retained snippet storage can be selected for a later install if it is still suitable; do not choose `+create` with its occupied ID/path. Inspect the guest console, `cloud-init status --long`, `/var/log/nextcloud-installer.log` (root-only) and `/var/lib/nextcloud-installer/status`. Do not paste credentials or unredacted configuration/logs into issues.
 
 If the host reports a guest-exec timeout, the guest command can still be running. Check `qm guest exec-status <VM ID> <PID>` if a PID was returned, or inspect the guest status/console; never launch a second installer while it is running. The installer refuses automatic guest reruns and occupied IDs. For a failed fresh deployment, correct the cause and create a new VM with a new ID and an empty data directory. Remove failed resources manually through Proxmox administration only after identifying them and confirming no data is needed. The NFS administrator decides how to handle any partial data. Host image/state files and snippets are retained intentionally; identify each exact path before manual cleanup.
 
@@ -132,6 +140,7 @@ node scripts/check-repo.mjs
 find . -type f -name '*.sh' -not -path './.git/*' -print0 | xargs -0 -r -n 1 bash -n
 find . -type f -name '*.sh' -not -path './.git/*' -print0 | xargs -0 -r shellcheck
 bash tests/validation.sh
+bash tests/storage.sh
 ```
 
 CI runs on pushes and pull requests without a Proxmox server. Release tags `vX.Y.Z` must match `VERSION=X.Y.Z`, pass the same checks and generate downloadable installer/checksum assets. See [CONTRIBUTING.md](CONTRIBUTING.md), [CHANGELOG.md](CHANGELOG.md) and [SECURITY.md](SECURITY.md).

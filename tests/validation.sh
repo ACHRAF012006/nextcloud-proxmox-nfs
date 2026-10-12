@@ -31,6 +31,16 @@ reject valid_ip 0.0.0.0/0 proxy
 reject valid_ip ::/0 proxy
 accept valid_mount /mnt/nextcloud
 accept valid_mount /srv/team-files
+accept valid_snippet_path /var/lib/nextcloud-vm-snippets
+accept valid_snippet_path /srv/local-snippets
+reject valid_snippet_path /etc/pve
+reject valid_snippet_path /var/lib/x/../other
+accept valid_guest_bridge vmbr0
+accept valid_guest_bridge br-lan
+accept valid_guest_bridge br.lan
+reject valid_guest_bridge fwbr100i0
+reject valid_guest_bridge fwpr100p0
+reject valid_guest_bridge 'bridge;id'
 reject valid_mount /etc
 reject valid_mount /mnt/x/../etc
 reject valid_mount /mnt/x//data
@@ -67,9 +77,9 @@ unset -f pvesh
 
 # Help/version must work without root, Linux host discovery, or downloads.
 host_preflight() { die 'Host operations reached during help/version'; }
-[[ $(main --version) == 1.0.0 ]]
+[[ $(main --version) == "$VERSION" ]]
 main --help >/dev/null
 # The documented curl/bash -c form has an empty BASH_SOURCE array.
-[[ $(bash -c "$(< install.sh)" installer --version) == 1.0.0 ]]
+[[ $(bash -c "$(< install.sh)" installer --version) == "$VERSION" ]]
 bash -c "$(< install.sh)" installer --help >/dev/null
 printf 'Passed %s validation/safety checks and CLI smoke checks.\n' "$checks"

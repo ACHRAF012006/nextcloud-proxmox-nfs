@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-VERSION=1.0.0
+VERSION=1.0.1
 
 usage() {
     printf '%s\n' \
@@ -7,7 +7,7 @@ usage() {
         'Usage: ./install.sh [--help | --version]' \
         'Without arguments: interactively review and create a new Ubuntu VM on Proxmox.' \
         'Run as root on an x86_64 Proxmox VE host. No NFS server changes are made.' \
-        'A local directory storage with snippets enabled is required.' \
+        'Suitable local snippet storage is detected; new local storage can be created after confirmation.' \
         'CPU/RAM/disk, storage, bridge/VLAN, networking, NFS, hostname/proxy and timezone are editable.'
 }
 
