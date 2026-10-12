@@ -1,0 +1,44 @@
+name: Bug report
+description: Report a reproducible installer problem with redacted diagnostics.
+title: '[Bug]: '
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: 'Do not paste credentials, keys, tokens, private IPs/domains, local configuration or unredacted logs. Report vulnerabilities privately using SECURITY.md.'
+  - type: input
+    id: version
+    attributes:
+      label: Installer version or commit
+      description: Run bash install.sh --version; specify whether using a tag or main.
+    validations:
+      required: true
+  - type: input
+    id: proxmox
+    attributes:
+      label: Proxmox VE version and architecture
+    validations:
+      required: true
+  - type: input
+    id: nfs
+    attributes:
+      label: NFS implementation and protocol
+      description: Platform/software version, NFSv3/v4/v4.1/v4.2; no addresses or export paths.
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps and expected versus actual result
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Redacted error details
+      description: Include failing stage and a minimal sanitized excerpt, never host state or credentials.
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy check
+      options:
+        - label: I removed credentials, SSH keys, tokens, real IP addresses/domains and private environment details.
+          required: true

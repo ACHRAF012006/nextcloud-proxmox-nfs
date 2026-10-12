@@ -1,0 +1,26 @@
+name: CI
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Shell syntax (every shell script)
+        run: find . -type f -name '*.sh' -not -path './.git/*' -print0 | xargs -0 -r -n 1 bash -n
+      - name: ShellCheck
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y shellcheck
+          find . -type f -name '*.sh' -not -path './.git/*' -print0 | xargs -0 -r shellcheck
+      - name: Build consistency and repository validation
+        run: |
+          node scripts/build.mjs --check
+          node scripts/check-repo.mjs
+      - name: Validation and mocked-host safety checks
+        run: bash tests/validation.sh

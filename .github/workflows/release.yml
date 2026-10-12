@@ -1,0 +1,39 @@
+name: Tagged release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Validate tag, installer and repository
+        run: |
+          source src/main.sh
+          test "$GITHUB_REF_NAME" = "v$VERSION"
+          node scripts/build.mjs --check
+          node scripts/check-repo.mjs
+          find . -type f -name '*.sh' -not -path './.git/*' -print0 | xargs -0 -r -n 1 bash -n
+          sudo apt-get update -qq
+          sudo apt-get install -y shellcheck
+          find . -type f -name '*.sh' -not -path './.git/*' -print0 | xargs -0 -r shellcheck
+          bash tests/validation.sh
+  publish:
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Build installer checksum
+        run: sha256sum install.sh > install.sh.sha256
+      - name: Publish tagged release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" install.sh install.sh.sha256 --verify-tag --title "$GITHUB_REF_NAME" --notes-file docs/release-notes.md
