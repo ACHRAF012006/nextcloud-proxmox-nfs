@@ -53,13 +53,14 @@ reject guest_result_ok <<< '{"exited":true,"exitcode":1}'
 
 # Cluster VM IDs include both VMs and containers; failures must fail closed.
 VMID=321
-# shellcheck disable=SC2329
+# Mocks are invoked indirectly, including after export via declare -f in a child shell.
+# shellcheck disable=SC2317,SC2329
 pvesh() { printf '%s\n' '[{"vmid":322}]'; }
 accept assert_vm_unused
-# shellcheck disable=SC2329
+# shellcheck disable=SC2317,SC2329
 pvesh() { printf '%s\n' '[{"vmid":321,"type":"lxc"}]'; }
 reject bash -c "$(declare -f die assert_vm_unused pvesh); VMID=321; assert_vm_unused" 2>/dev/null
-# shellcheck disable=SC2329
+# shellcheck disable=SC2317,SC2329
 pvesh() { return 1; }
 reject bash -c "$(declare -f die assert_vm_unused pvesh); VMID=321; assert_vm_unused" 2>/dev/null
 unset -f pvesh
@@ -68,4 +69,7 @@ unset -f pvesh
 host_preflight() { die 'Host operations reached during help/version'; }
 [[ $(main --version) == 1.0.0 ]]
 main --help >/dev/null
+# The documented curl/bash -c form has an empty BASH_SOURCE array.
+[[ $(bash -c "$(< install.sh)" installer --version) == 1.0.0 ]]
+bash -c "$(< install.sh)" installer --help >/dev/null
 printf 'Passed %s validation/safety checks and CLI smoke checks.\n' "$checks"
